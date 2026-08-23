@@ -62,9 +62,9 @@ def plot_runs(
     ax.grid(True, alpha=0.3, zorder=0)
 
     handles = [
-        plt.Line2D([], [], marker="^", linestyle="", markersize=10, label="past the shell line (computation 3)"),
-        plt.Line2D([], [], marker="o", linestyle="", markersize=10, label="below the shell line"),
-        plt.Line2D([], [], marker="o", linestyle="", markersize=10, markerfacecolor="none", markeredgewidth=2.5, label="crosses the browser line"),
+        plt.Line2D([], [], marker="^", linestyle="", markersize=10, color="grey", label="past the shell line (computation 3)"),
+        plt.Line2D([], [], marker="o", linestyle="", markersize=10, color="grey", label="below the shell line"),
+        plt.Line2D([], [], marker="s", linestyle="", markersize=10, markerfacecolor="lightgrey", markeredgecolor="black", markeredgewidth=2.5, label="black edge = crosses the browser line (either shape)"),
     ]
     ax.legend(handles=handles, loc="upper left", fontsize=8)
 

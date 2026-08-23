@@ -71,14 +71,41 @@ def test_score_fixture_levels(fixture_run):
     c = run.cells
     assert c["computation"].level == 2  # item 3 mixed → 3 unproven
     assert c["world_reading"].level == 2  # item 6 failed cleanly
-    assert c["output_rendering"].level == 2  # keyword upgrade via 'image'
-    assert c["self_extension"].level == 3  # keyword 'inherits'... via 'inherit'
+    assert c["output_rendering"].level == 2  # artifact marker '.png' in evidence
+    assert c["self_extension"].level == 2  # item 11 pass proves 2; 3 is hint-only
+    assert any("planted by the question" in f for f in c["self_extension"].flags)
     assert c["persistence"].level == 2  # item 13 failed → 3 unproven
     assert c["delegation"].level == 0  # item 12 mixed proves nothing
     assert any("item 3" in f for f in c["computation"].flags)
     assert not run.past_shell_line
     # every cell dated
     assert all(cell.date == "2026-08-23" for cell in c.values())
+
+
+def test_walls_recorded_from_refusal_column(fixture_run):
+    run = score(parse_run(fixture_run))
+    assert any("✗-plumbing" in w for w in run.cells["world_reading"].walls)  # item 6 fail
+    assert any("✗-plumbing" in w for w in run.cells["persistence"].walls)  # item 13 no cron
+
+
+def test_planted_vocabulary_never_upgrades(tmp_path):
+    """A subject answering NO in the question's own words must not score the level.
+    Regression for the cowork-chrome 'Inheritance: no direct route' → SE 3 bug."""
+    rows = FIXTURE.replace(
+        "| 11 | Yes | ✓ | Built a tool; future session inherits it read-only. | — |",
+        "| 11 | Yes | ✓ | Built and ran it. Inheritance: no direct route — no future session inherits anything. | — |",
+    )
+    p = tmp_path / "negative-surface-2026-08-23.md"
+    p.write_text(rows)
+    run = score(parse_run(p))
+    assert run.cells["self_extension"].level == 2  # never 3 from prose substrings
+
+
+def test_undated_cell_refused():
+    from harness_cartography.scoring import Cell
+
+    with pytest.raises(ValueError, match="no date"):
+        Cell(dimension="computation", level=1, provenance="measured", date="")
 
 
 def test_missing_item_is_error(tmp_path):

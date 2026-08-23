@@ -44,12 +44,23 @@ PASS_PROVES = [
     (13, "persistence", 3),
 ]
 
-# Keyword assists: a pass whose evidence carries these upgrades the level, with
-# the keyword recorded in the cell so the upgrade is auditable.
-KEYWORD_UPGRADES = [
-    (8, "output_rendering", 2, ("png", "image", "chart", "plot", "widget")),
-    (11, "self_extension", 3, ("inherit", "future session")),
-    (12, "delegation", 2, ("subagent", "sub-agent")),
+# Evidence upgrades must key on markers the letter does NOT plant. The letter's
+# own questions contain "inherit", "future session", "subagent", "image",
+# "chart" — a subject answering NO in the question's vocabulary would fire a
+# substring match (this happened: cowork-chrome's "Inheritance: no direct
+# route" scored self_extension 3, caught by cold-eyes review 2026-08-23).
+# File extensions are the one marker class the questions never plant.
+EVIDENCE_UPGRADES = [
+    # Format names, not the letter's words ("image", "chart", "widget" are all
+    # planted by item 8's own question; "png"/"svg"/"matplotlib" are not).
+    (8, "output_rendering", 2, ("png", "jpg", "jpeg", "svg", "gif", "webp", "matplotlib", "seaborn")),
+]
+
+# Boundaries where the evidence MAY support a higher level but no safe
+# mechanical marker exists — emit a hint flag, never a level.
+HINT_ONLY = [
+    (11, "self_extension", 3),
+    (12, "delegation", 2),
 ]
 
 # Items whose ladder position a rule cannot fully settle — always flagged.
@@ -68,10 +79,21 @@ class Cell:
     date: str
     proved_by: list[int] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
+    walls: list[str] = field(default_factory=list)  # ✗-policy / ✗-plumbing per refused boundary
 
     def __post_init__(self):
         if not self.date:
             raise ValueError(f"cell {self.dimension} has no date — refuse to emit")
+
+
+def classify_wall(item) -> str:
+    """✗-policy vs ✗-plumbing from the report's own refusal column (§1 notation)."""
+    text = f"{item.refusal} {item.evidence}".lower()
+    if "declin" in text:
+        return "✗-policy"
+    if "fail" in text or "blocked" in text or "no tool" in text or "does not exist" in text or "no cron" in text:
+        return "✗-plumbing"
+    return "✗-unclassified"
 
 
 @dataclass
@@ -112,18 +134,28 @@ def score(report: Report) -> ScoredRun:
                 f"item {item_no} {item.verdict} ({item.outcome_raw!r}) — "
                 f"level {level} unproven, judge from evidence"
             )
-        # a clean fail proves the boundary was reached and refused/failed:
-        # the level simply stays below; no flag needed, the table shows it.
+            if item.verdict == "mixed" and "✗" in item.outcome_raw:
+                cell.walls.append(f"item {item_no} partial wall: {classify_wall(item)}")
+        else:  # clean fail: the boundary was reached and refused — record the wall type
+            cell.walls.append(f"item {item_no} at level {level}: {classify_wall(item)}")
 
-    for item_no, dim, level, keywords in KEYWORD_UPGRADES:
+    for item_no, dim, level, markers in EVIDENCE_UPGRADES:
         item = report.items.get(item_no)
         if item is None or item.verdict != "pass":
             continue
-        hit = next((k for k in keywords if k in item.evidence.lower()), None)
+        hit = next((m for m in markers if m in item.evidence.lower()), None)
         if hit and level > cells[dim].level:
             cells[dim].level = level
             cells[dim].proved_by.append(item_no)
-            cells[dim].flags.append(f"level {level} via keyword {hit!r} in item {item_no} — audit the evidence")
+            cells[dim].flags.append(f"level {level} via artifact marker {hit!r} in item {item_no} — audit the evidence")
+
+    for item_no, dim, level in HINT_ONLY:
+        item = report.items.get(item_no)
+        if item is not None and item.verdict == "pass" and cells[dim].level < level:
+            cells[dim].flags.append(
+                f"item {item_no} passed — evidence may support level {level}, but its markers are "
+                f"planted by the question; judge by hand (level stays at the rule floor)"
+            )
 
     for item_no, note in JUDGEMENT_ITEMS.items():
         item = report.items.get(item_no)
@@ -139,16 +171,17 @@ def dim_for_judgement(item_no: int) -> str:
 
 def cell_table_markdown(run: ScoredRun) -> str:
     lines = [
-        f"## Scored cells — {run.surface}, {run.date} (rule-derived; flags need judgement)",
+        f"## Scored cells — {run.surface}, {run.date} (rule-floor levels; flags need judgement)",
         "",
-        "| Dimension | Level | Proved by items | Flags |",
-        "|---|---|---|---|",
+        "| Dimension | Level | Provenance | Proved by | Walls | Flags |",
+        "|---|---|---|---|---|---|",
     ]
     for d in DIMENSIONS:
         c = run.cells[d]
         flags = "; ".join(c.flags) or "—"
+        walls = "; ".join(c.walls) or "—"
         proved = ", ".join(map(str, sorted(set(c.proved_by)))) or "—"
-        lines.append(f"| {d} | {c.level} | {proved} | {flags} |")
+        lines.append(f"| {d} | {c.level} | {c.provenance} {c.date} | {proved} | {walls} | {flags} |")
     lines.append("")
     lines.append(
         f"Freedom (sum of 7 primitives): **{run.freedom}**/21 · "
