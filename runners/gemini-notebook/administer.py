@@ -2,18 +2,34 @@
 # requires-python = ">=3.11"
 # dependencies = ["websockets"]
 # ///
+"""Administer the probe letter into a Gemini Notebook chat via raw CDP.
+
+Edit NOTEBOOK_MATCH and LETTER_PATH per run. Types the letter with real key
+events (the app's model ignores DOM-stuffing and Input.insertText), splitting
+after item 8's marker if it exceeds the ~3.9k query cap. Completion is judged
+by the page's own Responding/stop indicator, never innerText stability
+(README rule 4 — stability lies during thinking pauses)."""
 import asyncio, json, pathlib, urllib.request
 import websockets
 
-body = '\n'.join(pathlib.Path('/home/modha/notes/practices/harness-cartography/letter-v2.md').read_text().splitlines()[1:]).strip()
-split_at = body.index('8. **Draw.**')
-part1 = ("(Administrator's note: this letter arrives in two messages — the second ends with \"not of us.\" Please read both before reporting; a brief acknowledgement of this first half is fine.)\n\n" + body[:split_at].rstrip())
-part2 = "(Administrator's note: second and final message of the letter.)\n\n" + body[split_at:]
-assert len(part1) < 3800 and len(part2) < 3800, (len(part1), len(part2))
-print(f'part1={len(part1)} part2={len(part2)}')
+NOTEBOOK_MATCH = 'notebook.google.com/notebook/6a6f999b'   # substring of the target tab URL
+LETTER_PATH = '/home/modha/notes/practices/harness-cartography/letter-v2.md'
+SPLIT_MARKER = '8. **Draw.**'
+CAP_SAFE = 3800
+
+body = '\n'.join(pathlib.Path(LETTER_PATH).read_text().splitlines()[1:]).strip()
+if len(body) > CAP_SAFE:
+    at = body.index(SPLIT_MARKER)
+    parts = [
+        ("(Administrator's note: this letter arrives in two messages — the second ends with \"not of us.\" Please read both before reporting; a brief acknowledgement of this first half is fine.)\n\n" + body[:at].rstrip()),
+        ("(Administrator's note: second and final message of the letter.)\n\n" + body[at:]),
+    ]
+    assert all(len(p) < CAP_SAFE for p in parts), [len(p) for p in parts]
+else:
+    parts = [body]
 
 tabs = json.load(urllib.request.urlopen('http://localhost:9223/json'))
-tab = next(t for t in tabs if 'notebook.google.com/notebook/6a6f999b' in t.get('url',''))
+tab = next(t for t in tabs if NOTEBOOK_MATCH in t.get('url', ''))
 
 async def main():
     async with websockets.connect(tab['webSocketDebuggerUrl'], max_size=50*1024*1024) as ws:
@@ -37,36 +53,32 @@ async def main():
                 else:
                     await call('Input.dispatchKeyEvent', {'type':'keyDown','key':ch,'text':ch})
                     await call('Input.dispatchKeyEvent', {'type':'keyUp','key':ch})
-        async def submit_and_wait(label, maxpolls=24):
+        async def submit_and_wait(label, maxwait_s=300):
             state = json.loads(await js("(function(){const t=document.querySelector('textarea[aria-label=\"Query box\"]');const b=t.closest('form').querySelector('button[aria-label=\"Submit\"]');return JSON.stringify({len:t.value.length,dis:b.disabled});})()"))
             print(label, 'pre-submit:', state)
             if state['dis']:
                 print('GATED — abort'); return False
             await js("(function(){const b=document.querySelector('textarea[aria-label=\"Query box\"]').closest('form').querySelector('button[aria-label=\"Submit\"]');b.click();return 1;})()")
-            prev, stable = -1, 0
-            for i in range(maxpolls):
+            await asyncio.sleep(5)   # let generation begin so the indicator exists
+            for _ in range(maxwait_s // 5):
+                responding = await js("document.body.innerText.includes('Responding') || !!document.querySelector('[aria-label=\"Stop\"], .stop-button')")
+                if not responding:
+                    print(label, 'response complete'); return True
                 await asyncio.sleep(5)
-                cur = await js("document.body.innerText.length")
-                stable = stable + 1 if cur == prev else 0
-                prev = cur
-                if stable >= 3:
-                    break
-            print(label, f'response settled at {prev} chars')
-            return True
+            print(label, f'still responding after {maxwait_s}s'); return False
 
-        await call('Page.bringToFront')
-        await asyncio.sleep(0.3)
+        await call('Page.bringToFront')          # README rule 1: background tabs are input-deaf
+        await asyncio.sleep(0.5)
         await js("(function(){const t=document.querySelector('textarea[aria-label=\"Query box\"]');t.focus();t.select();return 1;})()")
         await call('Input.dispatchKeyEvent', {'type':'keyDown','key':'Backspace','code':'Backspace','windowsVirtualKeyCode':8})
         await call('Input.dispatchKeyEvent', {'type':'keyUp','key':'Backspace','code':'Backspace','windowsVirtualKeyCode':8})
         await asyncio.sleep(0.3)
-        await type_text(part1)
-        await asyncio.sleep(1.5)
-        if not await submit_and_wait('PART1'): return
-        await js("(function(){const t=document.querySelector('textarea[aria-label=\"Query box\"]');t.focus();return 1;})()")
-        await type_text(part2)
-        await asyncio.sleep(1.5)
-        if not await submit_and_wait('PART2', maxpolls=36): return
+        for n, part in enumerate(parts, 1):
+            await type_text(part)
+            await asyncio.sleep(1.5)
+            if not await submit_and_wait(f'PART{n}'):
+                return
+            await js("(function(){const t=document.querySelector('textarea[aria-label=\"Query box\"]');t.focus();return 1;})()")
         print('ADMINISTERED')
 
 asyncio.run(main())
