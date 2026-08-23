@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "Kinetic layer for harness cartography — administers the probe letter across surfaces (passe runners) and scores the reports into cell tables and plots"
 requires-python = ">=3.11"
 license = "MIT"
+dependencies = ["matplotlib"]
+
+[project.scripts]
+score = "harness_cartography.cli:main"
 
 [dependency-groups]
 dev = ["pytest"]
